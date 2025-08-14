@@ -573,25 +573,27 @@ with tab1:
             height=150
         )
 
-with tab2:    with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
+with tab2:
 
-            st.header("Generation Settings")
-            fees = st.slider("Number of Fee Line Items", min_value=1, max_value=200, value=20)
-            expenses = st.slider("Number of Expense Line Items", min_value=0, max_value=50, value=5)
-            max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
+    with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
+
+        st.header("Generation Settings")
+        fees = st.slider("Number of Fee Line Items", min_value=1, max_value=200, value=20)
+        expenses = st.slider("Number of Expense Line Items", min_value=0, max_value=50, value=5)
+        max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
     
-            st.subheader("Output Settings")
-            include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
-            include_pdf = st.checkbox("Include PDF Invoice", value=True)
-            generate_multiple = st.checkbox("Generate Multiple Invoices")
-            num_invoices = 1
-            multiple_periods = False
-            if generate_multiple:
-                num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
-                multiple_periods = st.checkbox("Multiple Billing Periods")
-                if multiple_periods:
-                    num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
-                    num_invoices = num_periods
+        st.subheader("Output Settings")
+        include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
+        include_pdf = st.checkbox("Include PDF Invoice", value=True)
+        generate_multiple = st.checkbox("Generate Multiple Invoices")
+        num_invoices = 1
+        multiple_periods = False
+        if generate_multiple:
+        num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
+        multiple_periods = st.checkbox("Multiple Billing Periods")
+        if multiple_periods:
+        num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
+        num_invoices = num_periods
 
 # This if block is now necessary to place the email content into the dynamic tab
 if send_email:

@@ -1,11 +1,3 @@
-
-# ---- Mobile detection ----
-import streamlit as st
-import re
-if "user_agent" not in st.session_state:
-    ua = st.runtime.scriptrunner.get_script_run_ctx().session_info.client.user_agent if hasattr(st.runtime.scriptrunner.get_script_run_ctx().session_info.client, "user_agent") else ""
-    st.session_state["is_mobile"] = bool(re.search("iPhone|Android.*Mobile|iPad", ua))
-
 import streamlit as st
 import pandas as pd
 import random
@@ -16,48 +8,6 @@ import os
 import logging
 import re
 import smtplib
-
-
-# ---- Mobile-friendly page config ----
-try:
-    st.set_page_config(
-        page_title="LEDES Invoice Generator",
-        page_icon="📄",
-        layout="wide",
-        initial_sidebar_state="collapsed"
-    )
-except Exception:
-    pass
-
-
-# ---- Mobile-first CSS tweaks ----
-st.markdown("""
-<style>
-@media (max-width: 480px) {
-  .block-container { padding-top: 0.5rem; padding-bottom: 4.5rem; }
-  h1, h2, h3 { line-height: 1.2; }
-  .stButton > button, .stDownloadButton > button { width: 100% !important; padding: 0.9rem 1rem; font-size: 1rem; }
-  .stTextInput > div > div > input,
-  .stNumberInput input,
-  .stSelectbox > div > div { font-size: 1rem; }
-  .stCheckbox label, .stRadio label { font-size: 0.98rem; }
-}
-.stButton > button, .stDownloadButton > button { border-radius: 10px; }
-.sticky-footer {
-  position: fixed; bottom: 0; left: 0; right: 0;
-  padding: 0.6rem 0.9rem;
-  background: var(--background-color);
-  box-shadow: 0 -6px 18px rgba(0,0,0,0.08);
-  z-index: 1000;
-}
-.sticky-footer .footer-grid { display: grid; grid-template-columns: 1fr; gap: 0.5rem; }
-@media (min-width: 700px) {
-  .sticky-footer .footer-grid { grid-template-columns: 1fr auto auto; }
-}
-</style>
-""", unsafe_allow_html=True)
-
-
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -568,17 +518,6 @@ def _send_email_with_attachment(recipient_email, subject, body, attachments: lis
 
 # --- Streamlit App UI ---
 st.title("LEDES Invoice Generator")
-
-# ---- Compact summary card ----
-st.markdown("### Invoice Summary")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric(label="Client ID", value=str(client_id) if 'client_id' in locals() else "-")
-with col2:
-    st.metric(label="Billing Period", value=f"{billing_start_date} to {billing_end_date}" if 'billing_start_date' in locals() else "-")
-with col3:
-    st.metric(label="Invoices", value=len(rows) if 'rows' in locals() else 0)
-
 st.write("Generate and optionally email LEDES and PDF invoices.")
 
 # --- Sidebar for user inputs ---
@@ -634,31 +573,30 @@ with tab1:
             height=150
         )
 
-with tab2:
-    st.header("Generation Settings")
-    with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
-        fees = st.number_input("Number of Fee Line Items", min_value=0, step=1) if st.session_state.get("is_mobile") else st.number_input("Number of Fee Line Items", min_value=1, max_value=10000, value=20, step=1)
-        expenses = st.number_input("Number of Expense Line Items", min_value=0, max_value=10000, value=5, step=1)
-        max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
-    
-        st.subheader("Output Settings")
-        include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
-        include_pdf = st.checkbox("Include PDF Invoice", value=True)
-        generate_multiple = st.checkbox("Generate Multiple Invoices")
-        num_invoices = 1
-        multiple_periods = False
-        if generate_multiple:
-            num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
-            multiple_periods = st.checkbox("Multiple Billing Periods")
-            if multiple_periods:
-                num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
-                num_invoices = num_periods
+with tab2:    with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
 
-    # This if block is now necessary to place the email content into the dynamic tab
+            st.header("Generation Settings")
+            fees = st.slider("Number of Fee Line Items", min_value=1, max_value=200, value=20)
+            expenses = st.slider("Number of Expense Line Items", min_value=0, max_value=50, value=5)
+            max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
+    
+            st.subheader("Output Settings")
+            include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
+            include_pdf = st.checkbox("Include PDF Invoice", value=True)
+            generate_multiple = st.checkbox("Generate Multiple Invoices")
+            num_invoices = 1
+            multiple_periods = False
+            if generate_multiple:
+                num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
+                multiple_periods = st.checkbox("Multiple Billing Periods")
+                if multiple_periods:
+                    num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
+                    num_invoices = num_periods
+
+# This if block is now necessary to place the email content into the dynamic tab
 if send_email:
     with tab3:
-    with st.expander('Advanced Settings', expanded=True):
-            st.header("Email Delivery")
+        st.header("Email Delivery")
         recipient_email = st.text_input("Recipient Email Address:")
         st.caption(f"Sender Email will be from: {st.secrets.get('email', {}).get('username', 'N/A')}")
 else:
@@ -763,23 +701,3 @@ if generate_button:
                     billing_end_date = end_of_current_period
             
             st.success("Invoice generation complete!")
-
-# ---- Enhanced mobile typography/spacing ----
-st.markdown("""
-<style>
-:root { --radius: 12px; }
-@media (max-width: 480px) {
-  .block-container { padding-left: 0.6rem; padding-right: 0.6rem; }
-  .stTabs [data-baseweb="tab-list"] { flex-wrap: wrap; row-gap: 0.25rem; }
-  .stTabs [data-baseweb="tab"] { font-size: 0.95rem; padding: 0.3rem 0.6rem; }
-  .stExpander { border-radius: var(--radius); border: 1px solid rgba(0,0,0,0.07); }
-  .summary-card { border-radius: var(--radius); border: 1px solid rgba(0,0,0,0.08); padding: 0.75rem 1rem; background: rgba(0,0,0,0.02); }
-  .summary-grid { display: grid; grid-template-columns: 1fr; gap: 0.35rem; }
-}
-@media (min-width: 481px) {
-  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem 1rem; }
-}
-.summary-item { font-size: 0.95rem; }
-.summary-item .k { opacity: 0.65; margin-right: 0.4rem; }
-</style>
-""", unsafe_allow_html=True)

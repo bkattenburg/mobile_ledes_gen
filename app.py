@@ -636,7 +636,7 @@ with tab1:
 
 with tab2:
     st.header("Generation Settings")
-        with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
+    with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
         fees = st.number_input("Number of Fee Line Items", min_value=0, step=1) if st.session_state.get("is_mobile") else st.number_input("Number of Fee Line Items", min_value=1, max_value=10000, value=20, step=1)
         expenses = st.number_input("Number of Expense Line Items", min_value=0, max_value=10000, value=5, step=1)
         max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)

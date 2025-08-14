@@ -589,9 +589,11 @@ with tab2:
         num_invoices = 1
         multiple_periods = False
         if generate_multiple:
+            pass
         num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
         multiple_periods = st.checkbox("Multiple Billing Periods")
         if multiple_periods:
+            pass
         num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
         num_invoices = num_periods
 

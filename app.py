@@ -622,7 +622,7 @@ with st.expander("File Upload & Output Options"):
     uploaded_timekeeper_file = st.file_uploader("Upload Timekeeper CSV (tk_info.csv)", type="csv")
     timekeeper_data = _load_timekeepers(uploaded_timekeeper_file)
 
-    use_custom_tasks = st.checkbox("Use Custom Line Item Details?", value=False)
+    use_custom_tasks = st.checkbox("Use Custom Line Item Details?", value=True)
     uploaded_custom_tasks_file = None
     if use_custom_tasks:
         uploaded_custom_tasks_file = st.file_uploader("Upload Custom Line Items CSV (custom_details.csv)", type="csv")
@@ -684,7 +684,7 @@ with tab2:
     
     st.subheader("Output Settings")
     include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
-    include_pdf = st.checkbox("Include PDF Invoice", value=True)
+    include_pdf = st.checkbox("Include PDF Invoice", value=False)
     
     generate_multiple = st.checkbox("Generate Multiple Invoices", help="Create more than one invoice.")
     num_invoices = 1

@@ -87,7 +87,7 @@ def _ensure_mandatory_lines(rows, timekeeper_data, invoice_desc, client_id, law_
     hours = 1
     rate = round(random.uniform(25, 80), 2)
     total = round(hours * rate, 2)
-    uber_desc = "10-mile Uber ride to client’s office"
+    uber_desc = "10-mile Uber ride to client's office"
     rows.append({
         "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
         "LINE_ITEM_DATE": _rand_date_str(), "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
@@ -863,7 +863,7 @@ def _ensure_mandatory_lines(rows, timekeeper_data, invoice_desc, client_id, law_
     hours = 1
     rate = round(random.uniform(25, 80), 2)
     total = round(hours * rate, 2)
-    uber_desc = "10-mile Uber ride to client’s office"
+    uber_desc = "10-mile Uber ride to client's office"
     rows.append({
         "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
         "LINE_ITEM_DATE": _rand_date_str(),

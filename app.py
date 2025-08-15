@@ -685,18 +685,21 @@ with tab2:
     st.subheader("Output Settings")
     include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
     include_pdf = st.checkbox("Include PDF Invoice", value=True)
-    generate_multiple = st.checkbox("Generate Multiple Invoices", help="Create more than one invoice. You can optionally backfill prior periods.")
+    
+    generate_multiple = st.checkbox("Generate Multiple Invoices", help="Create more than one invoice.")
     num_invoices = 1
     multiple_periods = False
+
     if generate_multiple:
-        num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1,
-        help="Creates N invoices. When 'Multiple Billing Periods' is enabled, one invoice per period.")
         multiple_periods = st.checkbox("Multiple Billing Periods",
-        help="Backfills one invoice per prior month from the given end date, newest to oldest.")
+            help="Backfills one invoice per prior month from the given end date, newest to oldest.")
         if multiple_periods:
             num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1,
             help="Number of month-long periods to create (overrides Number of Invoices).")
             num_invoices = num_periods
+        else:
+            num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1,
+            help="Creates N invoices. When 'Multiple Billing Periods' is enabled, one invoice per period.")
 
 # This if block is now necessary to place the email content into the dynamic tab
 if send_email:

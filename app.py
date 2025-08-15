@@ -8,6 +8,102 @@ import os
 import logging
 import re
 import smtplib
+
+# --- Helper prerequisites for Spend Agent ---
+try:
+    _find_timekeeper_by_name
+except NameError:
+    def _find_timekeeper_by_name(timekeepers, name):
+        if not timekeepers:
+            return None
+        for tk in timekeepers:
+            if str(tk.get("TIMEKEEPER_NAME", "")).strip().lower() == str(name).strip().lower():
+                return tk
+        return None
+
+try:
+    _force_timekeeper_on_row
+except NameError:
+    def _force_timekeeper_on_row(row, forced_name, timekeepers):
+        # Only applies to fee lines (no EXPENSE_CODE)
+        if row.get("EXPENSE_CODE"):
+            return row
+        tk = _find_timekeeper_by_name(timekeepers, forced_name)
+        if tk is None and timekeepers:
+            tk = timekeepers[0]
+        if tk is None:
+            row["TIMEKEEPER_NAME"] = forced_name
+            return row
+        row["TIMEKEEPER_NAME"] = forced_name
+        row["TIMEKEEPER_ID"] = tk.get("TIMEKEEPER_ID", row.get("TIMEKEEPER_ID", ""))
+        row["TIMEKEEPER_CLASSIFICATION"] = tk.get("TIMEKEEPER_CLASSIFICATION", row.get("TIMEKEEPER_CLASSIFICATION", ""))
+        try:
+            row["RATE"] = float(tk.get("RATE", row.get("RATE", 0.0)))
+            hours = float(row.get("HOURS", 0))
+            row["LINE_ITEM_TOTAL"] = round(hours * float(row["RATE"]), 2)
+        except Exception:
+            pass
+        return row
+
+# --- Helper: ensure mandated lines (KBCG, John Doe, Uber E110) ---
+def _ensure_mandatory_lines(rows, timekeeper_data, invoice_desc, client_id, law_firm_id, billing_start_date, billing_end_date):
+    import datetime, random
+    def _rand_date_str():
+        delta = billing_end_date - billing_start_date
+        num_days = max(1, delta.days + 1)
+        off = random.randint(0, num_days - 1)
+        return (billing_start_date + datetime.timedelta(days=off)).strftime("%Y-%m-%d")
+
+    # KBCG fee line
+    base_tk = _find_timekeeper_by_name(timekeeper_data, "Tom Delaganis") or (timekeeper_data[0] if timekeeper_data else None)
+    rate = float(base_tk.get("RATE", 250.0)) if base_tk else 250.0
+    hours = round(random.uniform(0.5, 3.0), 1)
+    total = round(hours * rate, 2)
+    kbcg_desc = ("Commenced data entry into the KBCG e-licensing portal for Piers Walter Vermont "
+                 "form 1005 application; Drafted deficiency notice to send to client re: same; "
+                 "Scheduled follow-up call with client to review application status and address outstanding deficiencies.")
+    rows.append({
+        "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+        "LINE_ITEM_DATE": _rand_date_str(), "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+        "TASK_CODE": "L140", "ACTIVITY_CODE": "A107", "EXPENSE_CODE": "",
+        "DESCRIPTION": kbcg_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
+    })
+
+    # John Doe fee line
+    base_tk = _find_timekeeper_by_name(timekeeper_data, "Ryan Kinsey") or (timekeeper_data[0] if timekeeper_data else None)
+    rate = float(base_tk.get("RATE", 250.0)) if base_tk else 250.0
+    hours = round(random.uniform(0.5, 3.0), 1)
+    total = round(hours * rate, 2)
+    jd_desc = ("Reviewed and summarized deposition transcript of John Doe; prepared exhibit index; "
+               "updated case chronology spreadsheet for attorney review")
+    rows.append({
+        "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+        "LINE_ITEM_DATE": _rand_date_str(), "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+        "TASK_CODE": "L120", "ACTIVITY_CODE": "A102", "EXPENSE_CODE": "",
+        "DESCRIPTION": jd_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
+    })
+
+    # 10-mile Uber ride expense (E110)
+    hours = 1
+    rate = round(random.uniform(25, 80), 2)
+    total = round(hours * rate, 2)
+    uber_desc = "10-mile Uber ride to client’s office"
+    rows.append({
+        "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+        "LINE_ITEM_DATE": _rand_date_str(), "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+        "TASK_CODE": "", "ACTIVITY_CODE": "", "EXPENSE_CODE": "E110",
+        "DESCRIPTION": uber_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
+    })
+
+    # Enforce timekeepers for matching keywords
+    for r in rows:
+        d = str(r.get("DESCRIPTION","")).lower()
+        if "kbcg" in d:
+            _force_timekeeper_on_row(r, "Tom Delaganis", timekeeper_data or [])
+        if "john doe" in d:
+            _force_timekeeper_on_row(r, "Ryan Kinsey", timekeeper_data or [])
+    return rows
+
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -520,8 +616,8 @@ def _send_email_with_attachment(recipient_email, subject, body, attachments: lis
 st.title("LEDES Invoice Generator")
 st.write("Generate and optionally email LEDES and PDF invoices.")
 
-# --- Sidebar for user inputs ---
-with st.sidebar:
+# --- File Upload and Output Options (collapsible for mobile) ---
+with st.expander("File Upload & Output Options"):
     st.header("File Upload")
     uploaded_timekeeper_file = st.file_uploader("Upload Timekeeper CSV (tk_info.csv)", type="csv")
     timekeeper_data = _load_timekeepers(uploaded_timekeeper_file)
@@ -536,10 +632,9 @@ with st.sidebar:
         custom_tasks_data = _load_custom_task_activity_data(uploaded_custom_tasks_file)
         if custom_tasks_data:
             task_activity_desc = custom_tasks_data
-
-# This checkbox controls the visibility of the email tab
-st.subheader("Output & Delivery Options")
-send_email = st.checkbox("Send Invoices via Email", value=True)
+    
+    st.subheader("Output & Delivery Options")
+    send_email = st.checkbox("Send Invoices via Email", value=True)
 
 # Dynamically create tabs based on the 'send_email' checkbox
 if send_email:
@@ -549,53 +644,59 @@ else:
     
 with tab1:
     st.header("Invoice Details")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Billing Information")
-        client_id = st.text_input("Client ID:", DEFAULT_CLIENT_ID)
-        law_firm_id = st.text_input("Law Firm ID:", DEFAULT_LAW_FIRM_ID)
-        matter_number_base = st.text_input("Matter Number:", "2025-XXXXXX")
-        invoice_number_base = st.text_input("Invoice Number (Base):", "2025MMM-XXXXXX")
-        ledes_version = st.selectbox("LEDES Version:", ["1998B", "XML 2.1"])
-        
-    with col2:
-        st.subheader("Invoice Dates & Description")
-        # --- Get the start and end dates of the previous month ---
-        today = datetime.date.today()
-        first_day_of_current_month = today.replace(day=1)
-        last_day_of_previous_month = first_day_of_current_month - datetime.timedelta(days=1)
-        first_day_of_previous_month = last_day_of_previous_month.replace(day=1)
-        billing_start_date = st.date_input("Billing Start Date", value=first_day_of_previous_month)
-        billing_end_date = st.date_input("Billing End Date", value=last_day_of_previous_month)
-        invoice_desc = st.text_area(
-            "Invoice Description (One per period, each on a new line)", 
-            value="Professional Services Rendered", 
-            height=150
-        )
+    # No st.columns() for better mobile layout
+    st.subheader("Billing Information")
+    client_id = st.text_input("Client ID:", DEFAULT_CLIENT_ID)
+    law_firm_id = st.text_input("Law Firm ID:", DEFAULT_LAW_FIRM_ID)
+    matter_number_base = st.text_input("Matter Number:", "2025-XXXXXX")
+    invoice_number_base = st.text_input("Invoice Number (Base):", "2025MMM-XXXXXX")
+    LEDES_OPTIONS = ["1998B", "XML 2.1"]
+    ledes_version = st.selectbox(
+        "LEDES Version:",
+        LEDES_OPTIONS,
+        key="ledes_version",
+        help="XML 2.1 export is not implemented yet; please use 1998B."
+    )
+
+    if ledes_version == "XML 2.1":
+        st.warning("This is not yet implemented - please use 1998B")
+
+    st.subheader("Invoice Dates & Description")
+    # --- Get the start and end dates of the previous month ---
+    today = datetime.date.today()
+    first_day_of_current_month = today.replace(day=1)
+    last_day_of_previous_month = first_day_of_current_month - datetime.timedelta(days=1)
+    first_day_of_previous_month = last_day_of_previous_month.replace(day=1)
+    billing_start_date = st.date_input("Billing Start Date", value=first_day_of_previous_month)
+    billing_end_date = st.date_input("Billing End Date", value=last_day_of_previous_month)
+    invoice_desc = st.text_area(
+        "Invoice Description (One per period, each on a new line)", 
+        value="Professional Services Rendered", 
+        height=150
+    )
 
 with tab2:
-
-    with st.expander("Advanced Settings (mobile-optimized)", expanded=False):
-
-        st.header("Generation Settings")
-        fees = st.slider("Number of Fee Line Items", min_value=1, max_value=200, value=20)
-        expenses = st.slider("Number of Expense Line Items", min_value=0, max_value=50, value=5)
-        max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
+    st.header("Generation Settings")
+    spend_agent = st.checkbox("Spend Agent", value=False, help="Ensures 2 Fee + 1 Expense Line Items are included for Spend Agent; Slider counts will be adjusted.")
+    fees = st.slider("Number of Fee Line Items", min_value=1, max_value=200, value=20)
+    expenses = st.slider("Number of Expense Line Items", min_value=0, max_value=50, value=5)
+    max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
     
-        st.subheader("Output Settings")
-        include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
-        include_pdf = st.checkbox("Include PDF Invoice", value=True)
-        generate_multiple = st.checkbox("Generate Multiple Invoices")
-        num_invoices = 1
-        multiple_periods = False
-        if generate_multiple:
-            pass
-        num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
-        multiple_periods = st.checkbox("Multiple Billing Periods")
+    st.subheader("Output Settings")
+    include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
+    include_pdf = st.checkbox("Include PDF Invoice", value=True)
+    generate_multiple = st.checkbox("Generate Multiple Invoices", help="Create more than one invoice. You can optionally backfill prior periods.")
+    num_invoices = 1
+    multiple_periods = False
+    if generate_multiple:
+        num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1,
+        help="Creates N invoices. When 'Multiple Billing Periods' is enabled, one invoice per period.")
+        multiple_periods = st.checkbox("Multiple Billing Periods",
+        help="Backfills one invoice per prior month from the given end date, newest to oldest.")
         if multiple_periods:
-            pass
-        num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
-        num_invoices = num_periods
+            num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1,
+            help="Number of month-long periods to create (overrides Number of Invoices).")
+            num_invoices = num_periods
 
 # This if block is now necessary to place the email content into the dynamic tab
 if send_email:
@@ -612,6 +713,9 @@ generate_button = st.button("Generate Invoice(s)")
 
 # --- Main app logic ---
 if generate_button:
+    if ledes_version == "XML 2.1":
+        st.error("LEDES XML 2.1 is not yet implemented. Please switch to 1998B.")
+        st.stop()
     if timekeeper_data is None:
         st.warning("Please upload a valid timekeeper CSV file.")
     elif send_email and not recipient_email:
@@ -634,11 +738,13 @@ if generate_button:
                 current_invoice_desc = descriptions[i] if multiple_periods and i < len(descriptions) else descriptions[0]
                 
                 # Generate invoice data
-                rows, total_amount = _generate_invoice_data(
-                    fees, expenses, timekeeper_data, client_id, law_firm_id,
+                fees_used = max(0, fees - 2) if spend_agent else fees
+                expenses_used = max(0, expenses - 1) if spend_agent else expenses
+                rows, total_amount = _generate_invoice_data(fees_used, expenses_used, timekeeper_data, client_id, law_firm_id,
                     current_invoice_desc, billing_start_date, billing_end_date,
                     task_activity_desc, MAJOR_TASK_CODES, max_daily_hours, include_block_billed, faker
                 )
+                rows = _ensure_mandatory_lines(rows, timekeeper_data, current_invoice_desc, client_id, law_firm_id, billing_start_date, billing_end_date) if spend_agent else rows
                 df_invoice = pd.DataFrame(rows)
                 
                 # Filenames
@@ -705,3 +811,183 @@ if generate_button:
                     billing_end_date = end_of_current_period
             
             st.success("Invoice generation complete!")
+
+
+def _ensure_mandatory_lines(rows, timekeeper_data, invoice_desc, client_id, law_firm_id, billing_start_date, billing_end_date):
+    """Append the three mandated lines (KBCG, John Doe, 10-mile Uber) to rows, always.
+    Also enforces the timekeeper rules for any rows containing those keywords.
+    """
+    import datetime, random
+    def _rand_date_str():
+        # pick a date within the billing window
+        delta = billing_end_date - billing_start_date
+        num_days = max(1, delta.days + 1)
+        off = random.randint(0, num_days - 1)
+        return (billing_start_date + datetime.timedelta(days=off)).strftime("%Y-%m-%d")
+
+    # KBCG fee line (no forced TASK_CODE, ACTIVITY A107)
+    base_tk = _find_timekeeper_by_name(timekeeper_data, "Tom Delaganis") or (timekeeper_data[0] if timekeeper_data else None)
+    rate = float(base_tk.get("RATE", 250.0)) if base_tk else 250.0
+    hours = round(random.uniform(0.5, 3.0), 1)
+    total = round(hours * rate, 2)
+    kbcg_desc = ("Commenced data entry into the KBCG e-licensing portal for Piers Walter Vermont "
+                 "form 1005 application; Drafted deficiency notice to send to client re: same; "
+                "Scheduled follow-up call with client to review application status and address outstanding deficiencies.")
+    rows.append({
+        "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+        "LINE_ITEM_DATE": _rand_date_str(),
+        "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+        "TASK_CODE": "L140", "ACTIVITY_CODE": "A107", "EXPENSE_CODE": "",
+        "DESCRIPTION": kbcg_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
+    })
+
+    # John Doe fee line (L120/A102), block-billed style with semicolons
+    base_tk = _find_timekeeper_by_name(timekeeper_data, "Ryan Kinsey") or (timekeeper_data[0] if timekeeper_data else None)
+    rate = float(base_tk.get("RATE", 250.0)) if base_tk else 250.0
+    hours = round(random.uniform(0.5, 3.0), 1)
+    total = round(hours * rate, 2)
+    jd_desc = ("Reviewed and summarized deposition transcript of John Doe; prepared exhibit index; "
+               "updated case chronology spreadsheet for attorney review")
+    rows.append({
+        "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+        "LINE_ITEM_DATE": _rand_date_str(),
+        "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+        "TASK_CODE": "L120", "ACTIVITY_CODE": "A102", "EXPENSE_CODE": "",
+        "DESCRIPTION": jd_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
+    })
+
+    # 10-mile Uber ride expense (E110)
+    hours = 1
+    rate = round(random.uniform(25, 80), 2)
+    total = round(hours * rate, 2)
+    uber_desc = "10-mile Uber ride to client’s office"
+    rows.append({
+        "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+        "LINE_ITEM_DATE": _rand_date_str(),
+        "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+        "TASK_CODE": "", "ACTIVITY_CODE": "", "EXPENSE_CODE": "E110",
+        "DESCRIPTION": uber_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
+    })
+
+    # Enforce timekeepers across all rows
+    for r in rows:
+        d = str(r.get("DESCRIPTION","")).lower()
+        if "kbcg" in d:
+            _force_timekeeper_on_row(r, "Tom Delaganis", timekeeper_data or [])
+        if "john doe" in d:
+            _force_timekeeper_on_row(r, "Ryan Kinsey", timekeeper_data or [])
+    return rows
+
+
+# --- Spend-aware override: base generator without forced mandatory lines ---
+def _generate_invoice_data(
+    fee_count, expense_count, timekeeper_data, client_id, law_firm_id, invoice_desc,
+    billing_start_date, billing_end_date, task_activity_desc, major_task_codes,
+    max_hours_per_tk_per_day, include_block_billed, faker_instance
+):
+    rows = []
+    delta = billing_end_date - billing_start_date
+    num_days = max(1, (delta.days + 1))
+    major_items = [item for item in task_activity_desc if item[0] in major_task_codes] if task_activity_desc else []
+    other_items = [item for item in task_activity_desc if item[0] not in major_task_codes] if task_activity_desc else []
+    current_invoice_total = 0.0
+    daily_hours_tracker = {}
+    MAX_DAILY_HOURS = max_hours_per_tk_per_day or 8
+
+    def _rand_date_str():
+        import random, datetime
+        off = random.randint(0, num_days - 1)
+        return (billing_start_date + datetime.timedelta(days=off)).strftime("%Y-%m-%d")
+
+    import random
+    # Fees
+    for _ in range(int(fee_count or 0)):
+        if not task_activity_desc or not timekeeper_data:
+            break
+        tk_row = random.choice(timekeeper_data)
+        timekeeper_id = tk_row.get("TIMEKEEPER_ID", "")
+        if major_items and random.random() < 0.7:
+            task_code, activity_code, description = random.choice(major_items)
+        elif other_items:
+            task_code, activity_code, description = random.choice(other_items)
+        else:
+            break
+        line_item_date_str = _rand_date_str()
+        current_billed_hours = daily_hours_tracker.get((line_item_date_str, timekeeper_id), 0.0)
+        remaining_hours_capacity = float(MAX_DAILY_HOURS) - float(current_billed_hours)
+        if remaining_hours_capacity <= 0:
+            continue
+        hours_to_bill = round(random.uniform(0.5, min(8.0, remaining_hours_capacity)), 1)
+        if hours_to_bill <= 0:
+            continue
+        try:
+            hourly_rate = float(tk_row.get("RATE", 0.0))
+        except Exception:
+            hourly_rate = 0.0
+        line_item_total = round(hours_to_bill * hourly_rate, 2)
+        current_invoice_total += line_item_total
+        daily_hours_tracker[(line_item_date_str, timekeeper_id)] = current_billed_hours + hours_to_bill
+        try:
+            description = _replace_description_dates(description)
+        except Exception:
+            pass
+        try:
+            description = _replace_name_placeholder(description, faker_instance)
+        except Exception:
+            pass
+        rows.append({
+            "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+            "LINE_ITEM_DATE": line_item_date_str, "TIMEKEEPER_NAME": tk_row.get("TIMEKEEPER_NAME",""),
+            "TIMEKEEPER_CLASSIFICATION": tk_row.get("TIMEKEEPER_CLASSIFICATION",""),
+            "TIMEKEEPER_ID": timekeeper_id, "TASK_CODE": task_code,
+            "ACTIVITY_CODE": activity_code, "EXPENSE_CODE": "", "DESCRIPTION": description,
+            "HOURS": hours_to_bill, "RATE": hourly_rate, "LINE_ITEM_TOTAL": line_item_total
+        })
+
+    # Expenses
+    e101_actual_count = random.randint(1, min(3, int(expense_count or 0))) if expense_count else 0
+    for _ in range(e101_actual_count):
+        hours = random.randint(1, 200)
+        rate = round(random.uniform(0.14, 0.25), 2)
+        line_item_total = round(hours * rate, 2)
+        current_invoice_total += line_item_total
+        rows.append({
+            "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+            "LINE_ITEM_DATE": _rand_date_str(),
+            "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+            "TASK_CODE": "", "ACTIVITY_CODE": "", "EXPENSE_CODE": "E101",
+            "DESCRIPTION": "Copying", "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": line_item_total
+        })
+    remaining_expense_count = (int(expense_count or 0) - e101_actual_count) if expense_count else 0
+    try:
+        OTHER_EXPENSE_DESCRIPTIONS
+        EXPENSE_CODES
+    except NameError:
+        OTHER_EXPENSE_DESCRIPTIONS = ["Postage", "Meals", "Parking"]
+        EXPENSE_CODES = {"Postage": "E106", "Meals": "E112", "Parking": "E108"}
+    for _ in range(max(0, remaining_expense_count)):
+        description = random.choice(OTHER_EXPENSE_DESCRIPTIONS)
+        expense_code = EXPENSE_CODES.get(description, "")
+        hours = 1
+        rate = round(random.uniform(25, 200), 2)
+        line_item_total = round(hours * rate, 2)
+        current_invoice_total += line_item_total
+        rows.append({
+            "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
+            "LINE_ITEM_DATE": _rand_date_str(),
+            "TIMEKEEPER_NAME": "", "TIMEKEEPER_CLASSIFICATION": "", "TIMEKEEPER_ID": "",
+            "TASK_CODE": "", "ACTIVITY_CODE": "", "EXPENSE_CODE": expense_code,
+            "DESCRIPTION": description, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": line_item_total
+        })
+
+    # Block billing: if disabled, drop lines with semicolons (we don't add mandated John Doe here)
+    if not include_block_billed:
+        filtered = []
+        for r in rows:
+            desc = str(r.get("DESCRIPTION",""))
+            if "; " in desc:
+                continue
+            filtered.append(r)
+        rows = filtered
+
+    return rows, current_invoice_total

@@ -817,7 +817,7 @@ if generate_button:
 
 
 def _ensure_mandatory_lines(rows, timekeeper_data, invoice_desc, client_id, law_firm_id, billing_start_date, billing_end_date):
-    """Append the three mandated lines (KBCG, John Doe, 10-mile Uber) to rows, always.
+    """Append the three mandated lines (KBCG, John Doe,  Uber) to rows, always.
     Also enforces the timekeeper rules for any rows containing those keywords.
     """
     import datetime, random
@@ -859,11 +859,11 @@ def _ensure_mandatory_lines(rows, timekeeper_data, invoice_desc, client_id, law_
         "DESCRIPTION": jd_desc, "HOURS": hours, "RATE": rate, "LINE_ITEM_TOTAL": total
     })
 
-    # 10-mile Uber ride expense (E110)
+    #  Uber ride expense (E110)
     hours = 1
     rate = round(random.uniform(25, 80), 2)
     total = round(hours * rate, 2)
-    uber_desc = "10-mile Uber ride to client's office"
+    uber_desc = " Uber ride to client's office"
     rows.append({
         "INVOICE_DESCRIPTION": invoice_desc, "CLIENT_ID": client_id, "LAW_FIRM_ID": law_firm_id,
         "LINE_ITEM_DATE": _rand_date_str(),

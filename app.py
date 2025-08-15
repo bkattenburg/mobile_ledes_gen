@@ -20,6 +20,11 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from PIL import Image as PILImage, ImageDraw, ImageFont
+import zipfile
+from email.message import EmailMessage
+import ssl
+from dataclasses import dataclass
+from typing import List, Tuple, Dict, Any
 
 # --- Constants for Invoice Generator ---
 EXPENSE_CODES = {
@@ -274,29 +279,23 @@ def _generate_invoice_data(fee_count, expense_count, timekeeper_data, client_id,
                     break
     return rows, current_invoice_total
 
-
-# Helper function to get image bytes safely
 def _get_logo_image_bytes():
     """Generates a default image or loads from file."""
     from PIL import Image as PILImage, ImageDraw, ImageFont
-    
-    # Try to load a local image from the 'assets' folder
+
     try:
-        # Update the path to point to the '.jpg' file
+        # Load the image from the assets directory. It's assumed to be there in a deployed app.
         image_path = "assets/nelsonmurdock2.jpg"
         img = PILImage.open(image_path)
         buf = io.BytesIO()
-        # Save the image as PNG for compatibility with ReportLab
         img.save(buf, format="PNG")
         buf.seek(0)
         return buf
     except FileNotFoundError:
-        # Fallback to generating a simple image if the file is not found
-        st.warning("Image file (assets/icon.jpg) not found. A placeholder will be used.")
+        st.warning("Image file (assets/nelsonmurdock2.jpg) not found. A placeholder will be used.")
         img = PILImage.new("RGB", (128, 128), color="white")
         draw = ImageDraw.Draw(img)
         try:
-            # Use a default font, as custom fonts might not be available
             font = ImageFont.load_default()
         except IOError:
             font = ImageFont.load_default()
@@ -305,12 +304,11 @@ def _get_logo_image_bytes():
         img.save(buf, format="PNG")
         buf.seek(0)
         return buf
+    except Exception as e:
+        st.error(f"Error loading image: {e}")
+        return None
 
 def _create_pdf_invoice(df, total_amount, invoice_number, invoice_date, billing_start_date, billing_end_date, client_id, law_firm_id):
-    """
-    Generates a PDF invoice with a layout that matches the provided example.
-    Includes conditional address blocks and a clean header.
-    """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -319,397 +317,272 @@ def _create_pdf_invoice(df, total_amount, invoice_number, invoice_date, billing_
         topMargin=1.0 * inch, bottomMargin=1.0 * inch
     )
     styles = getSampleStyleSheet()
-    available_width = doc.width
     elements = []
 
-    # --- HEADER: Law Firm | Client (Boxed) ---
-    # Section 1: Law firm info, conditionally with logo
+    # Header Section
     if law_firm_id == DEFAULT_LAW_FIRM_ID:
-        law_firm_info = (
-            f"<b>Nelson and Murdock</b><br/>{law_firm_id}<br/>"
-            "One Park Avenue<br/>Manhattan, NY 10003"
-        )
-        logo_file_name = "nelsonmurdock2.jpg"
-    else:
-        law_firm_info = (
-            f"<b>Your Law Firm Name</b><br/>{law_firm_id}<br/>"
-            "1001 Main Street, Big City, CA 90000"
-        )
-        logo_file_name = "icon.jpg" # Using a generic placeholder image
+        logo_image = _get_logo_image_bytes()
+        if logo_image:
+            elements.append(Image(logo_image, width=1.0 * inch, height=1.0 * inch))
 
-    # Dynamically build the logo path from the script's directory
-    script_dir = os.path.dirname(__file__)
-    logo_path = os.path.join(script_dir, "assets", logo_file_name)
+    # Law Firm and Client Info Table
+    firm_info = f"<b>Nelson and Murdock</b><br/>{law_firm_id}<br/>One Park Avenue<br/>Manhattan, NY 10003"
+    client_info = f"<b>A Onit Inc.</b><br/>{client_id}<br/>1360 Post Oak Blvd<br/>Houston, TX 77056"
 
-    left_style = ParagraphStyle(name="Left", parent=styles["Normal"], alignment=TA_LEFT, leading=12)
-    law_firm_para = Paragraph(law_firm_info, left_style)
-    header_left_content = law_firm_para
-
-    if law_firm_id == DEFAULT_LAW_FIRM_ID:
-        try:
-            img = Image(logo_path, width=0.6 * inch, height=0.6 * inch)
-            inner_table_data = [[img, law_firm_para]]
-            inner_table = Table(inner_table_data, colWidths=[0.7 * inch, None])
-            inner_table.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (1, 0), (1, 0), 6),
-            ]))
-            header_left_content = inner_table
-        except Exception as e:
-            logging.error(f"Error loading logo image from {logo_path}: {e}")
-            st.warning("Could not load law firm logo. Using text instead.")
-            header_left_content = law_firm_para
-
-    # Section 2: Client info block, left-aligned
-    if client_id == DEFAULT_CLIENT_ID:
-        client_info = (
-            f"<b>A Onit Inc.</b><br/>{client_id}<br/>"
-            "1360 Post Oak Blvd<br/>Houston, TX 77056"
-        )
-    else:
-        client_info = (
-            f"<b>Your Company Name</b><br/>{client_id}<br/>"
-            "1000 Main Street, Big City, CA 90000"
-        )
-    client_info_style = ParagraphStyle(name="ClientInfoLeft", parent=styles["Normal"], alignment=TA_LEFT)
-    client_para = Paragraph(client_info, client_info_style)
-
-    # Combined header table
-    header_data = [
-        [header_left_content, client_para]
-    ]
-    header_table = Table(header_data, colWidths=[available_width / 2, available_width / 2])
+    header_table_data = [[Paragraph(firm_info, styles['Normal']), Paragraph(client_info, styles['Normal'])]]
+    header_table = Table(header_table_data, colWidths=[doc.width/2.0, doc.width/2.0])
     header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('BOX', (0, 0), (0, 0), 1, colors.black),
-        ('BOX', (1, 0), (1, 0), 1, colors.black),
-        ('LEFTPADDING', (0, 0), (0, 0), 6),
-        ('RIGHTPADDING', (1, 0), (1, 0), 6),
         ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-        ('ALIGN', (1, 0), (1, 0), 'LEFT'),
-    ]))
-    elements.append(header_table)
-    elements.append(Spacer(1, 0.10 * inch))
-
-    # -------- Invoice Details (right under Client Info) --------
-    right_style = ParagraphStyle(name="Right", parent=styles["Normal"], alignment=TA_RIGHT)
-    invoice_details_text = (
-        f"<b>Invoice #:</b> {invoice_number}<br/>"
-        f"<b>Invoice Date:</b> {invoice_date.strftime('%Y-%m-%d')}<br/>"
-        f"<b>Billing Period:</b> {billing_start_date.strftime('%Y-%m-%d')} to {billing_end_date.strftime('%Y-%m-%d')}"
-    )
-    details_para = Paragraph(invoice_details_text, right_style)
-    details_table = Table(
-        [['', details_para]],
-        colWidths=[available_width / 2, available_width / 2]
-    )
-    details_table.setStyle(TableStyle([
         ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (1, 0), (1, 0), 6),
     ]))
-    elements.append(details_table)
-    elements.append(Spacer(1, 0.18*inch))
+    elements.append(header_table)
 
-    # --- INVOICE DETAILS TABLE ---
-    # Table headers
-    data = [['Date', 'Timekeeper', 'Task Code', 'Activity Code', 'Description', 'Hours', 'Rate', 'Total']]
-    
-    # Add line item rows
-    for _, row in df.iterrows():
-        # Correctly format rows to include Paragraphs for wrapping text
-        date = row['LINE_ITEM_DATE']
-        timekeeper = row['TIMEKEEPER_NAME'] if row['TIMEKEEPER_NAME'] else 'N/A'
-        task_code = row['TASK_CODE'] if row['TASK_CODE'] else 'N/A'
-        activity_code = row['ACTIVITY_CODE'] if row['ACTIVITY_CODE'] else 'N/A'
-        description = row['DESCRIPTION']
-        hours = row['HOURS']
-        rate = row['RATE']
-        total = row['LINE_ITEM_TOTAL']
-        
-        data.append([
-            date, 
-            timekeeper, 
-            task_code, 
-            activity_code, 
-            Paragraph(description, styles['Normal']),
-            f"{hours:.2f}", 
-            f"${rate:.2f}", 
-            f"${total:.2f}"
-        ])
+    elements.append(Spacer(1, 0.2 * inch))
+    elements.append(Paragraph(f"<b>Invoice #:</b> {invoice_number}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Invoice Date:</b> {invoice_date.strftime('%B %d, %Y')}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Billing Period:</b> {billing_start_date.strftime('%B %d, %Y')} - {billing_end_date.strftime('%B %d, %Y')}", styles['Normal']))
+    elements.append(Spacer(1, 0.4 * inch))
 
-    # Table styling
-    table = Table(data, colWidths=[1 * inch, 1.25 * inch, 0.75 * inch, 0.75 * inch, 2.25 * inch, 0.75 * inch, 0.75 * inch, 0.75 * inch])
-    table.setStyle(TableStyle([
+    # Table of Invoice Data
+    data = [df.columns.tolist()] + df.values.tolist()
+    table_style = TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ('BOX', (0, 0), (-1, -1), 1, colors.black),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('FONTSIZE', (0, 1), (-1, -1), 7),
-        ('LEFTPADDING', (0, 0), (-1, -1), 2),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-    ]))
-    elements.append(table)
-    elements.append(Spacer(1, 0.25 * inch))
-
-    # --- TOTAL AMOUNT SECTION ---
-    total_table_data = [[
-        Paragraph(f"<b>Total Amount Due:</b>", styles['Normal']),
-        Paragraph(f"<b>${total_amount:.2f}</b>", styles['Normal'])
-    ]]
-    total_table = Table(total_table_data, colWidths=[4 * inch, None])
-    total_table.setStyle(TableStyle([
-        ('LINEBELOW', (0, 0), (-1, -1), 1, colors.black),
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-    elements.append(total_table)
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ])
 
+    table = Table(data, colWidths=[1.0*inch, 1.2*inch, 1.0*inch, 1.0*inch, 1.0*inch, 1.0*inch, 1.0*inch])
+    table.setStyle(table_style)
+    elements.append(table)
+
+    # Footer/Total
+    elements.append(Spacer(1, 0.2 * inch))
+    total_text = f"<b>TOTAL AMOUNT DUE: ${total_amount:,.2f}</b>"
+    elements.append(Paragraph(total_text, styles['Normal']))
     doc.build(elements)
     buffer.seek(0)
     return buffer
 
-def _send_email_with_attachment(recipient_email, subject, body, attachments: list):
-    """
-    Sends an email with multiple file attachments.
-    Gets credentials from Streamlit Secrets.
-    Attachments is a list of tuples: [(filename, data_bytes), ...].
-    """
-    try:
-        sender_email = st.secrets.email.email_from
-        password = st.secrets.email.email_password
-    except AttributeError:
-        st.error("Email secrets not found. Please check your .streamlit/secrets.toml file.")
-        return
+@dataclass
+class InvoiceOutput:
+    df: pd.DataFrame
+    total_amount: float
+    ledes_content: str
+    ledes_filename: str
+    pdf_buffer: io.BytesIO
+    pdf_filename: str
+    client_id: str
 
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = recipient_email
-    msg['Subject'] = subject
-
-    msg.attach(MIMEText(body, 'plain'))
-    
-    for filename, data in attachments:
-        part = MIMEApplication(data, Name=filename)
-        part['Content-Disposition'] = f'attachment; filename="{filename}"'
-        msg.attach(part)
-    
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(sender_email, password)
-            server.send_message(msg)
-        st.success(f"Email sent successfully to {recipient_email}!")
-    except Exception as e:
-        st.error(f"Error sending email: {e}")
-
-# --- Streamlit App UI ---
-st.title("LEDES Invoice Generator")
-st.write("Generate and optionally email LEDES and PDF invoices.")
-
-# --- Sidebar for user inputs ---
-with st.sidebar:
-    st.header("File Upload")
+def _generate_multiple_invoices(num_invoices, starting_date, fee_count, expense_count, timekeeper_data, client_id, law_firm_id, invoice_desc, include_block_billed, max_hours_per_tk_per_day, include_pdf):
     faker = Faker()
-
-    # --- Checkbox to control the email tab's visibility ---
-    # This needs to be outside the tabs so it's always visible
-    st.subheader("Output & Delivery Options")
-    send_email = st.checkbox("Send Invoices via Email", value=True)
+    outputs = []
     
-    # Timekeeper Info
-    st.subheader("Timekeeper & Task Data")
-    uploaded_timekeeper_file = st.file_uploader("Upload Timekeeper CSV (e.g. tk_info.csv)", type="csv")
-    timekeeper_data = _load_timekeepers(uploaded_timekeeper_file)
-
-    use_custom_tasks = st.checkbox("Use Custom Line Item Details?", value=False)
-    uploaded_custom_tasks_file = None
-    if use_custom_tasks:
-        uploaded_custom_tasks_file = st.file_uploader("Upload Custom Line Items CSV (e.g . custom_details.csv)", type="csv")
+    # Calculate initial dates for the most recent period
+    billing_end_date = starting_date
+    billing_start_date = billing_end_date.replace(day=1)
     
-    # Task/Activity logic
-    task_activity_desc = DEFAULT_TASK_ACTIVITY_DESC
-    if use_custom_tasks and uploaded_custom_tasks_file:
-        custom_tasks_data = _load_custom_task_activity_data(uploaded_custom_tasks_file)
-        if custom_tasks_data:
-            task_activity_desc = custom_tasks_data
-
-    # Main parameters
-    st.subheader("Invoice Parameters")
-    #fees = st.number_input("# of Fee Line Items:", min_value=1, value=10, step=1)
-    #expenses = st.number_input("# of Expense Line Items:", min_value=1, value=5, step=1)
-    #max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
-    
-    #billing_start_date = st.date_input("Billing Start Date", datetime.date.today() - datetime.timedelta(days=30))
-    #billing_end_date = st.date_input("Billing End Date", datetime.date.today() - datetime.timedelta(days=1))
-    
-    # --- Get the start and end dates of the previous month ---
-    today = datetime.date.today()
-    first_day_of_current_month = today.replace(day=1)
-    last_day_of_previous_month = first_day_of_current_month - datetime.timedelta(days=1)
-    first_day_of_previous_month = last_day_of_previous_month.replace(day=1)
-
-    # --- User Inputs ---
-# --- User Inputs ---
-    tab1, tab2, tab3 = st.tabs(["Invoice Inputs", "Advanced Settings", "Email Configuration"])
-
-    with tab1:
-        st.header("Invoice Details")
+    for i in range(1, num_invoices + 1):
+        # Generate data for the current period
+        rows, total_amount = _generate_invoice_data(
+            fee_count=fee_count,
+            expense_count=expense_count,
+            timekeeper_data=timekeeper_data,
+            client_id=client_id,
+            law_firm_id=law_firm_id,
+            invoice_desc=invoice_desc,
+            billing_start_date=billing_start_date,
+            billing_end_date=billing_end_date,
+            task_activity_desc=DEFAULT_TASK_ACTIVITY_DESC,
+            major_task_codes=MAJOR_TASK_CODES,
+            max_hours_per_tk_per_day=max_hours_per_tk_per_day,
+            include_block_billed=include_block_billed,
+            faker_instance=faker
+        )
         
-        # Wrapped the billing info in a container
-        with st.container(border=True):
-            st.subheader("Billing Information")
-            client_id = st.text_input("Client ID:", DEFAULT_CLIENT_ID)
-            law_firm_id = st.text_input("Law Firm ID:", DEFAULT_LAW_FIRM_ID)
-            matter_number_base = st.text_input("Matter Number:", "2025-XXXXXX")
-            invoice_number_base = st.text_input("Invoice Number (Base):", "2025MMM-XXXXXX")
-            ledes_version = st.selectbox("LEDES Version:", ["1998B", "XML 2.1"])
-
-        # Wrapped the dates and description in another container
-        with st.container(border=True):
-            st.subheader("Invoice Dates & Description")
-            billing_start_date = st.date_input("Billing Start Date", value=first_day_of_previous_month)
-            billing_end_date = st.date_input("Billing End Date", value=last_day_of_previous_month)
-            invoice_desc = st.text_area(
-                "Invoice Description (One per period, each on a new line)", 
-                value="Professional Services Rendered", 
-                height=150
-            )
-
-    with tab2:
-        st.header("Generation Settings")
+        df_invoice = pd.DataFrame(rows)
         
-        with st.container(border=True):
-            st.subheader("Line Item Counts")
-            fees = st.number_input("# of Fee Line Items:", min_value=1, value=10, step=1)
-            expenses = st.number_input("# of Expense Line Items:", min_value=1, value=5, step=1)
-            max_daily_hours = st.number_input("Max Daily Timekeeper Hours:", min_value=1, max_value=24, value=16, step=1)
+        invoice_number = f"{billing_end_date.year}{billing_end_date.month:02d}-{random.randint(10000, 99999)}"
+        ledes_content = _create_ledes_1998b_content(rows, total_amount, billing_start_date, billing_end_date, invoice_number, client_id)
+        
+        ledes_filename = f"Invoice_{invoice_number}.txt"
+        
+        pdf_buffer = None
+        pdf_filename = None
+        if include_pdf:
+            pdf_buffer = _create_pdf_invoice(df_invoice, total_amount, invoice_number, billing_end_date, billing_start_date, billing_end_date, client_id, law_firm_id)
+            pdf_filename = f"Invoice_{invoice_number}.pdf"
+            
+        outputs.append(InvoiceOutput(
+            df=df_invoice,
+            total_amount=total_amount,
+            ledes_content=ledes_content,
+            ledes_filename=ledes_filename,
+            pdf_buffer=pdf_buffer,
+            pdf_filename=pdf_filename,
+            client_id=client_id
+        ))
 
-        with st.container(border=True):
-            st.subheader("Output Settings")
-            include_block_billed = st.checkbox("Include Block Billed Line Items", value=True)
-            generate_multiple = st.checkbox("Generate Multiple Invoices")
-            num_invoices = 1
-            multiple_periods = False  # Initialize the variable here
-            if generate_multiple:
-                num_invoices = st.number_input("Number of Invoices to Create:", min_value=1, value=1, step=1)
-                multiple_periods = st.checkbox("Multiple Billing Periods")
-                if multiple_periods:
-                    num_periods = st.number_input("How Many Billing Periods:", min_value=2, max_value=6, value=2, step=1)
-                    num_invoices = num_periods # To simplify, this will override the number of invoices if multiple periods are selected
-if send_email:
-    with tab3:
-        st.header("Email Delivery")
-        if send_email:
-            recipient_email = st.text_input("Recipient Email Address:")
-            include_pdf = st.checkbox("Include PDF Invoice")
-        st.caption(f"Sender Email will be from: {st.secrets.get('email', {}).get('username', 'N/A')}")
-else:
-# If not sending email, still need to define these variables
-    recipient_email = None
+        # Update dates for the next loop to go backwards in time
+        billing_end_date = billing_start_date - datetime.timedelta(days=1)
+        billing_start_date = billing_end_date.replace(day=1)
+
+    return outputs
+
+# Streamlit App
+st.set_page_config(layout="wide", page_title="LEDES Invoice Generator")
+st.title("LEDES Invoice Generator")
+
+st.sidebar.title("File Uploads")
+
+with st.sidebar.expander("Upload CSVs"):
+    timekeeper_file = st.file_uploader("Upload Timekeeper CSV", type="csv")
+    custom_tasks_file = st.file_uploader("Upload Custom Task CSV (Optional)", type="csv")
+
+st.sidebar.markdown("---")
+st.sidebar.info("Upload Timekeeper CSV to use custom timekeepers. Without a custom file, the generator will use mock data.")
+
+# Main content area with tabs
+tab1, tab2, tab3 = st.tabs(["Invoice Inputs", "Advanced Settings", "Email Configuration"])
+
+with tab1:
+    st.header("Invoice Generation Details")
     
-st.markdown("---")
-generate_button = st.button("Generate Invoice(s)")
+    with st.expander("Billing Information"):
+        law_firm_id = st.text_input("Law Firm ID", value=DEFAULT_LAW_FIRM_ID)
+        client_id = st.text_input("Client ID", value=DEFAULT_CLIENT_ID)
+        matter_number = st.text_input("Matter Number", value="01-22-LIT-001")
+        invoice_desc = st.text_input("Invoice Description", value=DEFAULT_INVOICE_DESCRIPTION)
 
-# --- Main app logic ---
-if generate_button:
-    if timekeeper_data is None:
-        st.warning("Please upload a valid timekeeper CSV file.")
-    elif send_email and not recipient_email:
-        st.warning("Please provide a recipient email address to send the invoice.")
-    else:
-        # NEW: Process descriptions
-        descriptions = [d.strip() for d in invoice_desc.split('\n') if d.strip()]
-        num_invoices = int(num_invoices)  # Ensure num_invoices is an integer
+    with st.expander("Invoice Dates & Description"):
+        num_invoices = st.number_input("Number of Invoices to Generate", min_value=1, max_value=12, value=1)
+        st.caption("Generates invoices for consecutive months, ending with the selected date.")
+        start_date = st.date_input("Billing Period End Date", value=datetime.date.today().replace(day=1) - datetime.timedelta(days=1))
         
-        if multiple_periods and len(descriptions) != num_invoices:
-            st.warning(f"You have selected to generate {num_invoices} invoices, but have provided {len(descriptions)} descriptions. Please provide one description per period.")
+    with st.expander("Line Item Counts"):
+        fee_count = st.number_input("Number of Fee Line Items", min_value=1, max_value=500, value=100)
+        expense_count = st.number_input("Number of Expense Line Items", min_value=0, max_value=100, value=10)
+
+with tab2:
+    st.header("Generation Settings")
+
+    with st.expander("Additional Data Sources"):
+        timekeeper_data = _load_timekeepers(timekeeper_file)
+        if timekeeper_data is None:
+            timekeeper_data = [
+                {"TIMEKEEPER_NAME": "Toby M. Wright", "TIMEKEEPER_CLASSIFICATION": "Partner", "TIMEKEEPER_ID": "TW123", "RATE": 533.00},
+                {"TIMEKEEPER_NAME": "Wendy Green", "TIMEKEEPER_CLASSIFICATION": "Associate", "TIMEKEEPER_ID": "WG456", "RATE": 475.00},
+                {"TIMEKEEPER_NAME": "Sheila Jackson", "TIMEKEEPER_CLASSIFICATION": "Paralegal", "TIMEKEEPER_ID": "SJ789", "RATE": 250.00},
+                {"TIMEKEEPER_NAME": "Rita McAvoy", "TIMEKEEPER_CLASSIFICATION": "Partner", "TIMEKEEPER_ID": "RM101", "RATE": 600.00},
+                {"TIMEKEEPER_NAME": "Nelson L. Gonzalez", "TIMEKEEPER_CLASSIFICATION": "Associate", "TIMEKEEPER_ID": "NG202", "RATE": 490.00},
+                {"TIMEKEEPER_NAME": "Marie Henderson", "TIMEKEEPER_CLASSIFICATION": "Associate", "TIMEKEEPER_ID": "MH303", "RATE": 480.00},
+            ]
+        custom_task_activity_data = _load_custom_task_activity_data(custom_tasks_file)
+        if custom_task_activity_data:
+            task_activity_desc = custom_task_activity_data
         else:
-            progress_bar = st.progress(0)
-            
-            # Loop for multiple invoices
-            for i in range(num_invoices):
-                progress_bar.progress((i + 1) / num_invoices)
+            task_activity_desc = DEFAULT_TASK_ACTIVITY_DESC
 
-                # NEW: Get the correct description for the current invoice
-                current_invoice_desc = descriptions[i] if multiple_periods and i < len(descriptions) else descriptions[0]
-                
-                # Generate invoice data
-                rows, total_amount = _generate_invoice_data(
-                    fees, expenses, timekeeper_data, client_id, law_firm_id,
-                    current_invoice_desc, billing_start_date, billing_end_date,
-                    task_activity_desc, MAJOR_TASK_CODES, max_daily_hours, include_block_billed, faker
+    with st.expander("Generation Logic"):
+        max_hours_per_tk_per_day = st.slider("Maximum Hours per Timekeeper per Day", min_value=1, max_value=24, value=8)
+        include_block_billed = st.checkbox("Include Block Billed Line Items?", value=True, help="Block billed items combine multiple tasks into one line item.")
+        include_pdf = st.checkbox("Include PDF Invoice?", value=True)
+
+with tab3:
+    st.header("Email Delivery")
+    
+    with st.expander("Email Details"):
+        send_email = st.checkbox("Enable Email Delivery?", help="Check this to send the generated files via email.")
+        to_addr = st.text_input("Recipient Email Address", disabled=not send_email)
+        email_from = st.text_input("Sender Email Address", disabled=not send_email)
+        email_password = st.text_input("Sender Password (or App Password)", type="password", disabled=not send_email)
+        email_subject = st.text_input("Email Subject", value="Legal Invoice from your firm", disabled=not send_email)
+        email_body = st.text_area("Email Body", value="Attached are the requested invoices.", disabled=not send_email)
+        
+    with st.expander("SMTP Settings (Optional Test)"):
+        diag_col1, diag_col2 = st.columns(2)
+        with diag_col1:
+            smtp_server = st.text_input("SMTP Server", value="smtp.gmail.com")
+            smtp_port = st.number_input("SMTP Port", value=465, min_value=1)
+            smtp_use_tls = st.checkbox("Use STARTTLS?", value=False)
+            if st.button("Test SMTP Connection"):
+                try:
+                    if smtp_use_tls:
+                        server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
+                        server.starttls()
+                        server.ehlo()
+                        server.login(email_from, email_password)
+                    else:
+                        context = ssl.create_default_context()
+                        with smtplib.SMTP_SSL(smtp_server, smtp_port, context=context, timeout=15) as server:
+                            server.login(email_from, email_password)
+                    st.success("SMTP connection & login OK.")
+                except Exception as e:
+                    st.error(f"SMTP test failed: {e!r}")
+                    st.caption("Tips: For Gmail, use an App Password and ensure EMAIL_FROM matches the authenticated account.")
+
+        with diag_col2:
+            if st.button("Send test to myself"):
+                try:
+                    _send_email_with_attachments(email_from, attachments=[])
+                    st.success(f"Test email sent to {email_from}. Check your inbox and spam folder.")
+                except Exception as e:
+                    st.error(f"Test send failed: {e!r}")
+
+    if send_email and st.button("Send Email Now"):
+        try:
+            _send_email_with_attachments(to_addr, attachments=outputs)
+            st.success(f"Email sent to {to_addr}")
+        except Exception as e:
+            st.error(f"Email failed: {e!r}")
+            st.caption("Common fixes: set SMTP_USE_TLS=true + SMTP_PORT=587 (STARTTLS) or use SSL on 465. For Gmail, use an App Password.")
+
+# The generation logic and output display
+if st.button("Generate Invoices"):
+    outputs = _generate_multiple_invoices(
+        num_invoices=num_invoices,
+        starting_date=start_date,
+        fee_count=fee_count,
+        expense_count=expense_count,
+        timekeeper_data=timekeeper_data,
+        client_id=client_id,
+        law_firm_id=law_firm_id,
+        invoice_desc=invoice_desc,
+        include_block_billed=include_block_billed,
+        max_hours_per_tk_per_day=max_hours_per_tk_per_day,
+        include_pdf=include_pdf
+    )
+
+    if not outputs:
+        st.error("No invoices were generated. Please check your inputs.")
+    else:
+        for i, output in enumerate(outputs):
+            st.subheader(f"Invoice {i+1}: {output.ledes_filename}")
+            
+            # Use columns to align the download buttons
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.download_button(
+                    label="Download LEDES File",
+                    data=output.ledes_content.encode('utf-8'),
+                    file_name=output.ledes_filename,
+                    mime="text/plain",
+                    key=f"download_ledes_{i}"
                 )
-                df_invoice = pd.DataFrame(rows)
-                
-                # Filenames
-                current_invoice_number = f"{invoice_number_base}-{i+1}"
-                #current_matter_number = f"{matter_number_base}-{i+1}"
-                current_matter_number = matter_number_base 
-                
-                # Create LEDES 1998B content
-                ledes_content = _create_ledes_1998b_content(rows, total_amount, billing_start_date, billing_end_date, current_invoice_number, current_matter_number)
-                
-                # Prepare attachments
-                attachments_to_send = []
-                
-                # Add LEDES file
-                ledes_filename = f"LEDES_1998B_{current_invoice_number}.txt"
-                attachments_to_send.append((ledes_filename, ledes_content.encode('utf-8')))
-
-                # Add PDF file if requested
-                if include_pdf:
-                    pdf_buffer = _create_pdf_invoice(df_invoice, total_amount, current_invoice_number, billing_end_date, billing_start_date, billing_end_date, client_id, law_firm_id)
-                    pdf_filename = f"Invoice_{current_invoice_number}.pdf"
-                    attachments_to_send.append((pdf_filename, pdf_buffer.getvalue()))
-                    pdf_buffer.seek(0)
-
-                # Handle output
-                if send_email:
-                    _send_email_with_attachment(
-                        recipient_email,
-                        f"LEDES Invoice for {current_matter_number}",
-                        f"Please find the attached invoice files for matter {current_matter_number}.",
-                        attachments_to_send
+            with col2:
+                if output.pdf_buffer:
+                    st.download_button(
+                        label="Download PDF Invoice",
+                        data=output.pdf_buffer.getvalue(),
+                        file_name=output.pdf_filename,
+                        mime="application/pdf",
+                        key=f"download_pdf_{i}"
                     )
-                    
-                else:
-                    st.subheader(f"Generated Invoice {i + 1}")
-                    
-                    # Use a text area for display
-                    st.text_area("LEDES 1998B Content", ledes_content, height=200)
 
-                    # Download buttons
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.download_button(
-                            label="Download LEDES File",
-                            data=ledes_content.encode('utf-8'),
-                            file_name=ledes_filename,
-                            mime="text/plain",
-                            key=f"download_ledes_{i}"
-                        )
-                    with col2:
-                        if include_pdf:
-                            pdf_buffer = _create_pdf_invoice(df_invoice, total_amount, current_invoice_number, billing_end_date, billing_start_date, billing_end_date, client_id, law_firm_id)
-                            st.download_button(
-                                label="Download PDF Invoice",
-                                data=pdf_buffer.getvalue(),
-                                file_name=pdf_filename,
-                                mime="application/pdf",
-                                key=f"download_pdf_{i}"
-                            )
-                        
-                if multiple_periods:
-                    end_of_current_period = billing_start_date - datetime.timedelta(days=1)
-                    start_of_current_period = end_of_current_period.replace(day=1)
-                    billing_start_date = start_of_current_period
-                    billing_end_date = end_of_current_period
-            
-            st.success("Invoice generation complete!")
+        st.success("Invoice generation complete!")
